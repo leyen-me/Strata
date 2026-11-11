@@ -96,8 +96,9 @@ async function loadKeys() {
     };
     const madeHere = "This key was made before the server kept its text: make a new one to copy or use it";
     const copy = button("Copy", async () => {
-      try { await navigator.clipboard.writeText(plain); copy.textContent = "Copied"; }
-      catch (e) { copy.textContent = "Select it"; }
+      await copyText(plain);                      // app.js: the async clipboard, or a selected textarea on plain http
+      copy.textContent = "Copied";
+      setTimeout(() => { copy.textContent = "Copy"; }, 1500);
     }, !!plain && !k.revoked, k.revoked ? "This key is revoked" : madeHere);
     const use = button("Use", () => { setApiKey(plain); use.textContent = "In use"; },
                        !!plain && !k.revoked, k.revoked ? "This key is revoked" : madeHere);
