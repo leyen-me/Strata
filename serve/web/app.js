@@ -73,14 +73,16 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
 });
 
 let tab = "chat";
+const VIEWS = ["chat", "images", "monitor", "keys", "about"];
 function showTab(name) {
-  tab = ["chat", "images", "monitor", "about"].includes(name) ? name : "chat";
+  tab = VIEWS.includes(name) ? name : "chat";
   for (const b of document.querySelectorAll(".st-tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
-  for (const v of ["chat", "images", "monitor", "about"]) $(`view-${v}`).hidden = v !== tab;
+  for (const v of VIEWS) $(`view-${v}`).hidden = v !== tab;
   if (tab === "images") $("img-prompt").focus();
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", tab === "chat" ? location.pathname : `#${tab}`);
   if (tab === "chat") $("input").focus();
   if (tab === "monitor") loadMcp();
+  if (tab === "keys" && typeof renderKeys === "function") renderKeys();
   if (tab === "about") loadConfig();
   if (lastMetrics) render(lastMetrics);
 }
@@ -96,6 +98,11 @@ function headers(json = false) {
   return h;
 }
 $("api-key").value = apiKey;
+function setApiKey(value) {                          // the Keys tab hands a new key to this page's chat
+  apiKey = (value || "").trim();
+  store.set("apikey", apiKey);
+  $("api-key").value = apiKey;
+}
 function saveApiKey(notify = false) {
   apiKey = $("api-key").value.trim();                // usable even when browser storage is blocked or full
   const saved = store.set("apikey", apiKey);
@@ -119,6 +126,8 @@ async function loadHealth() {
     health = await (await fetch("health")).json();
     renderEmptyChat();
     $("tab-btn-images").hidden = !health.image_generation;
+    $("tab-btn-keys").hidden = !health.accounts;       // the Keys tab exists only on a server with accounts
+    if (health.accounts && typeof initAccount === "function") initAccount();
     if (location.hash === "#images" && health.image_generation) showTab("images");
   } catch (e) {
     setTimeout(loadHealth, 2000);
@@ -184,7 +193,7 @@ async function poll() {
     const r = await fetch(reqShowAll ? "metrics?requests=all" : "metrics", {headers: headers()});
     if (r.status === 401) {
       setPill("error", tr("pill.keyNeeded", "API key needed"));
-      if (!keyWarned) { keyWarned = true; toast("warn", tr("pill.keyNeeded", "API key needed"), tr("toast.keyAbout", "This server needs a key: add it under About > Settings."), 6000); }
+      if (!keyWarned) { keyWarned = true; toast("warn", tr("pill.keyNeeded", "API key needed"), tr("toast.keyAbout", "This server needs a key: sign in under Keys and make one."), 6000); }
     } else if (r.ok) {
       const m = await r.json();
       if (metricsHold && epoch <= metricsHold.after && !metricsAgree(m.live, metricsHold.state)) {
@@ -302,7 +311,7 @@ $("unload-btn").onclick = async () => {
     try { body = await r.json(); } catch (e) { /* the connection dropped */ }
     const status = body.status || "";
     const msg = (body.error && body.error.message) ||
-                (r.status === 401 ? tr("toast.keyAbout2", "API key needed: add it under About > Settings.") : tr("toast.httpAnswer", "The server answered HTTP {code}.", {code: r.status}));
+                (r.status === 401 ? tr("toast.keyAbout2", "API key needed: sign in under Keys and make one.") : tr("toast.httpAnswer", "The server answered HTTP {code}.", {code: r.status}));
     const failTitle = loadingNow ? tr("model.loadFailed", "Load failed") : tr("model.unloadFailed", "Unload failed");
     if (loadingNow) {
       if (r.ok && status === "loaded") {
@@ -649,8 +658,7 @@ async function loadConfig() {
   const c = await r.json();
   cfgKeys = c.keys || [];
   $("cfg-file").textContent = c.file || "";
-  $("cfg-form").innerHTML = cfgKeys.map((k, i) => {
-    const id = `cfg-${i}`, v = k.value;
+  $("cfg-form").innerHTML = cfgKeys.map((k, i) => {    const id = `cfg-${i}`, v = k.value;
     let input;
     if (k.kind === "bool" || k.kind === "enum") {
       const opts = k.kind === "bool" ? [["true", "on"], ["false", "off"]] : k.choices.map((x) => [x, x]);
@@ -664,7 +672,7 @@ async function loadConfig() {
     }
     return `<label for="${id}" title="${esc(k.help)}">${esc(k.help)}<code>${esc(k.key)}</code></label>${input}`;
   }).join("");
-  $("cfg-card").hidden = false;
+  // the Model settings card stays hidden: the run config belongs to the owner, not to every visitor of this page
 }
 function configValue(k, el) {
   const s = el.value.trim();
@@ -1237,7 +1245,10 @@ async function generateReply() {
     if (!r.ok) {
       let msg = `HTTP ${r.status}`;
       try { msg = (await r.json()).error.message || msg; } catch (e) { /* not json */ }
-      if (r.status === 401) msg = tr("toast.keyNeeded", "This server needs an API key: add it under About > Settings.");
+      if (r.status === 401) {
+        if (typeof needSignIn === "function") needSignIn();   // no session: the Keys tab asks to sign in
+        msg = tr("toast.keyNeeded", "This server needs an API key: sign in under Keys and make one.");
+      }
       throw new Error(msg);
     }
     const reader = r.body.getReader(), dec = new TextDecoder();
@@ -1334,6 +1345,7 @@ $("new-btn").onclick = () => {
     messages = backup; saveChat(); renderChat();
   }});
 };
+$("reset-chat-btn").onclick = () => resetChats();     // chats-ui.js: clears every chat kept in this browser
 $("export-btn").onclick = () => {
   if (!messages.length) { toast("info", tr("export.nothing", "Nothing to save yet")); return; }
   const tools = (m) => (m.tools || []).filter((t) => t.result != null).map((t) =>

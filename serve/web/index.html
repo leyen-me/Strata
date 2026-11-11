@@ -27,6 +27,8 @@
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-image"/></svg><span data-i18n="tab.images">Images</span></button>
     <button class="st-tab" role="tab" id="tab-btn-monitor" aria-controls="view-monitor" aria-selected="false" data-tab="monitor">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-activity"/></svg><span data-i18n="tab.monitor">Monitor</span></button>
+    <button class="st-tab" role="tab" id="tab-btn-keys" aria-controls="view-keys" aria-selected="false" data-tab="keys" hidden>
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-key"/></svg><span>Keys</span></button>
     <button class="st-tab" role="tab" id="tab-btn-about" aria-controls="view-about" aria-selected="false" data-tab="about">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-info"/></svg><span data-i18n="tab.about">About</span></button>
   </nav>
@@ -34,6 +36,18 @@
   <span class="st-pill" id="pill" data-state="idle" role="status" aria-live="polite">
     <span class="st-pill__dot"></span><span id="pill-text" data-i18n="pill.connecting">Connecting&hellip;</span></span>
   <button class="st-btn st-btn--secondary" id="unload-btn" type="button" title="Waiting for the server" disabled>&hellip;</button>
+  <button class="st-btn st-btn--secondary" id="signin-btn" type="button" hidden>Sign in</button>
+  <div class="account-wrap" id="account-wrap" hidden>
+    <button class="st-btn st-btn--secondary" id="account-chip" type="button" aria-haspopup="true" aria-expanded="false"
+            aria-controls="account-menu"><svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-key"/></svg>
+      <span id="account-email"></span></button>
+    <div class="account-menu" id="account-menu" role="menu" hidden>
+      <button type="button" role="menuitem" id="account-menu-keys">API keys</button>
+      <button type="button" role="menuitem" id="signout-btn">Sign out</button>
+    </div>
+  </div>
+  <button class="st-btn st-btn--icon" id="reset-chat-btn" type="button" title="Reset chats" aria-label="Reset chats">
+    <svg class="st-icon"><use href="web/sprite.svg#i-trash"/></svg></button>
   <button class="st-btn st-btn--icon" id="theme-btn" title="Light / dark" aria-label="Switch between light and dark" data-i18n-title="theme.title" data-i18n-label="theme.label">
     <svg class="st-icon"><use id="theme-icon" href="web/sprite.svg#i-moon"/></svg></button>
 </header>
@@ -190,6 +204,48 @@
     </div>
   </section>
 
+  <!-- ============================ Keys ============================ -->
+  <section class="view view--keys" id="view-keys" role="tabpanel" aria-labelledby="tab-btn-keys" hidden>
+    <div class="about">
+      <div class="st-card" id="keys-auth-card" hidden>
+        <span class="card-title" id="keys-auth-title">Sign in</span>
+        <p class="muted small">An account gives you your own API key. Keys made here are the only ones this server
+          accepts, besides the owner's.</p>
+        <form class="keys-form" id="keys-auth-form">
+          <div class="st-field"><label class="st-label" for="keys-email">Email</label>
+            <input class="st-input" id="keys-email" type="email" required autocomplete="username"></div>
+          <div class="st-field"><label class="st-label" for="keys-password">Password</label>
+            <input class="st-input" id="keys-password" type="password" required minlength="8"
+                   autocomplete="current-password"></div>
+          <div class="keys-actions">
+            <button class="st-btn st-btn--primary" id="keys-auth-submit" type="submit">Sign in</button>
+            <button class="st-btn st-btn--secondary" id="keys-auth-switch" type="button">Create an account</button>
+          </div>
+          <p class="keys-err" id="keys-auth-err" role="status"></p>
+        </form>
+      </div>
+
+      <div class="st-card" id="keys-card" hidden>
+        <div class="req-head"><span class="card-title">API keys</span></div>
+        <p class="muted small">A key works in any OpenAI- or Anthropic-style client:
+          <code>&lt;this server&gt;/v1</code> as the base URL, the key as <code>Authorization: Bearer …</code> or
+          <code>x-api-key</code>. Signed in here, Copy and Use work for every valid key of yours, in any browser.
+          Revoking one stops it at its next request.</p>
+        <form class="keys-form keys-form--inline" id="keys-form">
+          <input class="st-input" id="keys-name" placeholder="laptop, ci, …" maxlength="64" aria-label="Key name">
+          <button class="st-btn st-btn--primary" type="submit">New key</button>
+        </form>
+        <div class="table-wrap">
+          <table class="st-table keys-table">
+            <thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Last used</th><th class="keys-actions-head">Actions</th></tr></thead>
+            <tbody id="keys-list"></tbody>
+          </table>
+        </div>
+        <p class="keys-err" id="keys-err" role="status"></p>
+      </div>
+    </div>
+  </section>
+
   <!-- ============================ About ============================ -->
   <section class="view view--about" id="view-about" role="tabpanel" aria-labelledby="tab-btn-about" hidden>
     <div class="about">
@@ -206,7 +262,7 @@
         <p class="muted">Any OpenAI- or Anthropic-compatible client works with these addresses.</p>
         <dl class="facts" id="facts-api"></dl>
       </div>
-      <div class="st-card">
+      <div class="st-card" hidden>
         <span class="card-title">Settings</span>
         <div class="st-field">
           <label class="st-label" for="api-key">API key <output>only if the server was started with one</output></label>
@@ -224,8 +280,6 @@
       </div>
       <div class="st-card cfg-card" id="cfg-card" hidden>
         <div class="req-head"><span class="card-title">Model settings</span><span class="muted small" id="cfg-file"></span></div>
-        <p class="muted small">Kept in the model's run config for every client. An empty field is the default. They
-          take effect the next time the model starts (close Strata's window and start it again).</p>
         <form class="cfg-form" id="cfg-form"></form>
         <div class="cfg-actions"><button class="st-btn st-btn--primary" id="cfg-save" type="button">Save</button>
           <span class="muted small" id="cfg-msg" role="status"></span></div>
@@ -317,5 +371,6 @@
 <script src="web/chatstore.js"></script>
 <script src="web/chats-ui.js"></script>
 <script src="web/app.js"></script>
+<script src="web/keys.js"></script>
 </body>
 </html>

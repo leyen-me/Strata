@@ -81,7 +81,7 @@ main { flex: 1; min-height: 0; display: flex; }
 .chip .st-btn--icon .st-icon { width: 14px; height: 14px; }
 
 /* ---------------------------------------------------------------- monitor */
-.view--monitor, .view--about { overflow-y: auto; }
+.view--monitor, .view--about, .view--keys { overflow-y: auto; }
 .monitor, .about { max-width: min(100%, 1920px); width: 100%; margin: 0 auto; padding: var(--st-s-6); display: flex; flex-direction: column;
                    gap: var(--st-s-5); }
 .state-card { display: flex; flex-direction: column; gap: var(--st-s-3); }
@@ -148,8 +148,7 @@ main { flex: 1; min-height: 0; display: flex; }
 /* ---------------------------------------------------------------- about */
 .about { max-width: min(100%, 1100px); }
 .about .st-card { display: flex; flex-direction: column; gap: var(--st-s-3); }
-.about p { margin: 0; }
-.facts { display: grid; grid-template-columns: minmax(140px, max-content) 1fr; gap: 10px var(--st-s-6); margin: 0; font-size: var(--st-fs-md); }
+.about p { margin: 0; }.facts { display: grid; grid-template-columns: minmax(140px, max-content) 1fr; gap: 10px var(--st-s-6); margin: 0; font-size: var(--st-fs-md); }
 .facts dt { color: var(--st-ink-muted); }
 .facts dd { margin: 0; color: var(--st-ink-soft); font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 6px;
             overflow-wrap: anywhere; }
@@ -159,6 +158,29 @@ main { flex: 1; min-height: 0; display: flex; }
 .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: var(--st-s-4); font-size: var(--st-fs-sm);
               font-weight: var(--st-fw-medium); color: var(--st-ink-soft); }
 .toggle-row .st-toggle { flex: none; }   /* a long label must not squeeze the switch */
+
+/* ---------------------------------------------------------------- account (the Keys tab and the header chip) */
+.account-wrap { position: relative; display: flex; align-items: center; flex: none; }
+.account-wrap .st-btn { display: inline-flex; align-items: center; gap: 6px; }
+#account-email { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-menu { position: absolute; top: 100%; right: 0; z-index: 30; min-width: 11rem; padding: var(--st-s-1);
+                display: flex; flex-direction: column; gap: 2px; background: var(--st-surface);
+                border: 1px solid var(--st-line); border-radius: var(--st-r-md); box-shadow: var(--st-sh-card); }
+.account-menu button { display: flex; align-items: center; width: 100%; padding: 8px 10px; border: 0; cursor: pointer;
+                       border-radius: var(--st-r-sm); background: transparent; color: var(--st-ink); text-align: left;
+                       font: 500 var(--st-fs-sm) var(--st-font); }
+.account-menu button:hover, .account-menu button:focus-visible { background: var(--st-surface-2); }
+.account-menu #signout-btn { color: var(--st-danger-text); }
+.view--keys .about { max-width: min(100%, 1100px); }
+.keys-form { display: flex; flex-direction: column; gap: var(--st-s-3); max-width: 380px; }
+.keys-form--inline { flex-direction: row; align-items: center; max-width: none; }
+.keys-form--inline .st-input { flex: 1 1 12rem; min-width: 0; }
+.keys-err { margin: 0; min-height: 1em; color: var(--st-danger-text); font-size: var(--st-fs-xs); }
+.keys-plain { font: 400 var(--st-fs-xs) var(--st-font-mono); word-break: break-all; }
+.keys-actions-head { text-align: right; }
+.keys-table .st-btn { height: 30px; padding: 0 10px; border-radius: 8px; white-space: nowrap;
+                      font: 600 var(--st-fs-xs)/1 var(--st-font); }
+.keys-row-actions { display: flex; flex-wrap: nowrap; justify-content: flex-end; gap: var(--st-s-1); white-space: nowrap; }
 
 /* ---------------------------------------------------------------- drawer */
 .st-drawer { z-index: 40; }

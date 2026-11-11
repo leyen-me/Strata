@@ -428,6 +428,36 @@ function branchHere(i) {
   return true;
 }
 
+// ------------------------------------------------------------------ reset (the header's bin button)
+// "New chat" keeps the old one in the list on purpose; this is the one action that throws the list away.
+function resetChats() {
+  if (busy) { stillWriting(); return; }
+  if (!confirm("Delete every chat kept in this browser? This cannot be undone.")) return;
+  releasePending();
+  closePanel();
+  clearUndo();
+  if (listOn) {
+    for (const c of chats) chatStore.remove(c.id);
+    chats = [];
+    chat = H.newChat();
+    chats.push(chat);
+    chatId = chat.id;
+    store.set("chatId", chatId);
+    chatStore.put(H.cleanChat(chat));
+    setMessages(chat.messages);
+    renderSidebar();
+  } else {
+    chat = null;
+    messages = [];
+  }
+  store.set("chat", []);
+  renderChat();
+  renderAttachments();
+  autosize();
+  $("input").focus();
+  toast("info", "Chats reset", "Every chat kept in this browser is gone.", 6000);
+}
+
 // ------------------------------------------------------------------ wiring (called once by app.js)
 function initChats() {
   $("sidebar-toggle").onclick = () => setSidebar(!sidebarOpen, true);

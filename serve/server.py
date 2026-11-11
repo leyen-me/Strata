@@ -65,6 +65,7 @@ from serve.frontend import (THINK_END, ChatTemplate, Event, OutputParser, parser
                             tool_choice_of, unmark_think_literals)
 from serve.mcp import McpCancelled, hub_from_config  # noqa: E402
 from serve import runconfig  # noqa: E402
+from serve import accounts as accounts_api  # noqa: E402
 from serve.webfiles import subtree_file as web_subtree_file  # noqa: E402
 from strata_control import engine_component  # noqa: E402
 from strata_control import tls  # noqa: E402
@@ -4860,6 +4861,8 @@ class Service:
         self.literals = literal_tags(getattr(tokenizer, "control_tokens", ()))   # texts that stay text inside a message
         self.fit_max_tokens = fit_max_tokens          # default: clamp the output cap to the room left; False (--no-fit-max-tokens) = 400
         self.aliases: list[str] = []                  # #297: other names of the model (the config's `aliases`)
+        self.alias_presets: dict[str, dict] = {}      # per-alias sampling (the config's `alias_presets`)
+        self.model_descriptions: dict[str, str] = {}  # a sentence per model id (the config's `model_descriptions`)
         self.answer_room = True                       # 0.1.45: see ANSWER_ROOM_MIN_CAP (the config's "answer_room": false turns it off)
         self.reasoning_close_retry = False            # #1053 (opt-in): close the thinking once when a reply ends inside it
         self.codex_compaction_cache = False           # #924 (opt-in): a Codex compaction is rendered with its conversation's tools
@@ -4874,6 +4877,7 @@ class Service:
         self.slot_save_path = None                    # --slot-save-path: /slots/0?action=save|restore (off when None)
         self.embeddings = threading.local()           # the current request's image embeddings file (GENI)
         self.api_key = ""                              # when set, /v1/* needs it (Bearer or x-api-key)
+        self.accounts = None                           # the config's "accounts": per-person keys, usage (serve/accounts.py)
         # #458 (opt-in, the config's "effort_position": "end"): a non-default reasoning effort goes in a short system
         # turn before the answer instead of the top of the prompt, so switching it keeps the cached conversation
         self.effort_end = False
@@ -5172,6 +5176,55 @@ class Service:
             if x and x != self.model and x not in names:
                 names.append(x)
         self.aliases = names
+
+    # the settings an alias may preset: the ones that change what the engine computes, not how a request reads
+    ALIAS_PRESET_KEYS = ("experimental_speed_projection",)
+
+    def set_alias_presets(self, presets) -> None:
+        """The config's `alias_presets`: {"<alias id>": {"experimental_speed_projection": true}}.  A request that names
+        that alias gets these settings unless it sets them itself; every other name is untouched.  ValueError for
+        anything else."""
+        if presets is None:
+            presets = {}
+        if not isinstance(presets, dict):
+            raise ValueError(f"alias_presets={presets!r}: expected an object of alias -> settings")
+        out = {}
+        for name, block in presets.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f"alias_presets={presets!r}: expected model names as keys")
+            if not isinstance(block, dict):
+                raise ValueError(f"alias_presets[{name.strip()!r}]={block!r}: expected an object of settings")
+            unknown = sorted(set(block) - set(self.ALIAS_PRESET_KEYS))
+            if unknown:
+                raise ValueError(f"alias_presets[{name.strip()!r}]: unknown setting(s) {', '.join(unknown)} "
+                                 f"(known: {', '.join(self.ALIAS_PRESET_KEYS)})")
+            for key, value in block.items():
+                if not isinstance(value, bool):
+                    raise ValueError(f"alias_presets[{name.strip()!r}].{key}={value!r}: expected true or false")
+            out[name.strip()] = dict(block)
+        self.alias_presets = out
+
+    def set_model_descriptions(self, descriptions) -> None:
+        """The config's `model_descriptions`: {"<model id or alias>": "one sentence"}.  Listed by /v1/models so a
+        picker can tell two names of the same weights apart; anything else is unchanged.  ValueError for anything
+        that is not an object of name -> text."""
+        if descriptions is None:
+            descriptions = {}
+        if not isinstance(descriptions, dict):
+            raise ValueError(f"model_descriptions={descriptions!r}: expected an object of model -> text")
+        out = {}
+        for name, text in descriptions.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f"model_descriptions={descriptions!r}: expected model names as keys")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError(f"model_descriptions[{name.strip()!r}]={text!r}: expected a sentence")
+            out[name.strip()] = text.strip()
+        self.model_descriptions = out
+
+    def alias_preset_for(self, req) -> dict:
+        """The preset of the alias a request names, or {}: its keys are defaults under the request's own values."""
+        asked = req.get("model") if isinstance(req, dict) else None
+        return self.alias_presets.get(asked.strip(), {}) if isinstance(asked, str) else {}
 
     def model_names(self) -> list[str]:
         return [self.model, *self.aliases]
@@ -6293,6 +6346,9 @@ class Service:
         # the model card's sampling for this thinking state, then the config's block, then the Chat settings shared with
         # apps; the request's own fields win over all of them
         defaults = {**model_card_sampling(self.model_arch, thinking), **self.sampling_defaults, **self.shared}
+        preset = self.alias_preset_for(sampling)      # an alias may preset a setting; the request still wins
+        if preset:
+            defaults = {**defaults, **preset}
         if defaults:                   # the request's own fields win (explicit 0 stays greedy)
             req_values = {k: v for k, v in (sampling or {}).items() if v is not None}
             sampling = {**defaults, **req_values}
@@ -7861,13 +7917,24 @@ def make_handler(svc: Service):
             self.wfile.write(body)
 
         def _authorized(self) -> bool:
-            if not svc.api_key:
+            """The shared key from the config, or (with "accounts") a key the page issued for one account."""
+            if svc.api_key:
+                auth = self.headers.get("Authorization", "")
+                given = auth[7:].strip() if auth.lower().startswith("bearer ") else self.headers.get("x-api-key", "")
+                if key_matches(given, svc.api_key):
+                    return True
+            elif svc.accounts is None:
                 return True
             auth = self.headers.get("Authorization", "")
             given = auth[7:].strip() if auth.lower().startswith("bearer ") else self.headers.get("x-api-key", "")
-            if key_matches(given, svc.api_key):
-                return True
-            self._json(401, {"error": {"type": "authentication_error", "message": "missing or wrong API key"}})
+            if svc.accounts is not None and given:
+                owner = svc.accounts.check_key(given)
+                if owner is not None:
+                    self.account = owner
+                    return True
+            self._json(401, {"error": {"type": "authentication_error",
+                                       "message": "missing or wrong API key" if svc.api_key or svc.accounts is None
+                                       else "missing or wrong API key (make one in the Keys tab)"}})
             return False
 
         def _authorized_telemetry(self) -> bool:
@@ -7881,8 +7948,98 @@ def make_handler(svc: Service):
             self._json(401, {"error": {"type": "authentication_error", "message": "missing or wrong telemetry key"}})
             return False
 
+        # ---- accounts (opt-in: the Keys tab of the web page; serve/accounts.py) ----------------------------------
+        def _account_user(self):
+            """The account behind this request's token, or None after the 401 has been sent."""
+            auth = self.headers.get("Authorization", "")
+            token = auth[7:].strip() if auth.lower().startswith("bearer ") else self.headers.get("x-account-token", "")
+            user = svc.accounts.user_from_token(token) if token else None
+            if user is None:
+                self._json(401, {"error": {"type": "authentication_error", "message": "sign in again"}})
+            return user
+
+        def _account_get(self, path):
+            user = self._account_user()
+            if user is None:
+                return
+            if path == "/account/me":
+                self._json(200, {"user": user, "register": svc.accounts.allow_register,
+                                 "usage": svc.accounts.usage(user["id"], 30)["totals"]})
+            elif path == "/account/keys":
+                self._json(200, {"keys": svc.accounts.keys(user["id"])})
+            elif path == "/account/usage":
+                days = parse_qs(urlsplit(self.path).query).get("days", ["30"])[0]
+                self._json(200, svc.accounts.usage(user["id"], int(days) if days.isdecimal() else 30))
+            elif path == "/account/overview" and user["is_admin"]:
+                self._json(200, svc.accounts.overview())
+            else:
+                self._json(404, {"error": {"message": "not found"}})
+
+        def _account_post(self, path):
+            try:
+                body = json.loads(self._body() or b"{}")
+            except ValueError:
+                self._json(400, {"error": {"message": "send a JSON object"}})
+                return
+            if not isinstance(body, dict):
+                self._json(400, {"error": {"message": "send a JSON object"}})
+                return
+            try:
+                if path == "/account/register":
+                    user, token = svc.accounts.register(body.get("email") or "", body.get("password") or "")
+                elif path == "/account/login":
+                    user, token = svc.accounts.login(body.get("email") or "", body.get("password") or "")
+                else:
+                    user, token = self._account_user(), None     # everything below needs a session
+                    if user is None:
+                        return
+                    if path == "/account/keys":
+                        self._json(200, {"key": svc.accounts.issue_key(user["id"], body.get("name") or "")})
+                        return
+                    if path == "/account/keys/revoke":
+                        key_id = body.get("id")
+                        if not isinstance(key_id, int):
+                            raise accounts_api.AuthError(400, "send the key's id")
+                        ok = svc.accounts.revoke(user["id"], key_id)
+                        self._json(200 if ok else 404, {"revoked": ok})
+                        return
+                    self._json(404, {"error": {"message": "not found"}})
+                    return
+            except accounts_api.AuthError as e:
+                self._json(e.status, {"error": {"type": "account_error", "message": e.message}})
+                return
+            self._json(200, {"token": token, "user": user})
+
+        def _meter(self, items, api, path="", model=""):
+            """One usage row for the key that made this request, from the usage the stream already carries.
+
+            Wrapped around the same items the answer is built from, so a streamed and a collected reply cost the same
+            one pass.  A request that ended early still records what it had spent."""
+            owner = getattr(self, "account", None)
+            if svc.accounts is None or owner is None:
+                yield from items
+                return
+            prompt = completion = None
+            started = time.time()
+            try:
+                for item in items:
+                    p, c = accounts_api.usage_tokens(item)
+                    if p is not None:
+                        prompt = p
+                    if c is not None:
+                        completion = c
+                    yield item
+            finally:
+                svc.accounts.note_usage(owner["key_id"], owner["user_id"], path=path, model=model or "",
+                                        prompt_tokens=prompt, completion_tokens=completion,
+                                        ms=int((time.time() - started) * 1000))
+                items.close()
+
         def do_GET(self):
             path = self.path.split("?")[0].rstrip("/")
+            if svc.accounts is not None and path.startswith("/account/"):
+                self._account_get(path)
+                return
             if path.startswith("/tool-media/"):
                 if not self._authorized():
                     return
@@ -8188,6 +8345,7 @@ def make_handler(svc: Service):
             elif path in ("/health", "/api/health"):
                 self._json(200, {"status": "ok", "max_context": svc.reported_ctx(), "model": svc.model,
                                  "images": svc.vision is not None, "api_key": bool(svc.api_key),
+                                 "accounts": svc.accounts is not None,
                                  "image_generation": svc.images is not None,
                                  "loaded": svc.loaded(), "service": "strata"})
             elif path.startswith("/v1/images/files/"):
@@ -8229,7 +8387,20 @@ def make_handler(svc: Service):
                         loaded = True
                     if svc.aliases:                       # #297: the aliases, and each one listed under its own id
                         model["aliases"] = list(svc.aliases)
-                    data = [model, *({**model, "id": x, "alias_of": svc.model} for x in svc.aliases)]
+                    if svc.model in svc.model_descriptions:   # a human sentence for a picker's list
+                        model["description"] = svc.model_descriptions[svc.model]
+
+                    def entry(name):
+                        # an alias is the same model: no `aliases` list of its own, but its own description
+                        e = {**model, "id": name, "alias_of": svc.model}
+                        e.pop("aliases", None)
+                        if name in svc.model_descriptions:
+                            e["description"] = svc.model_descriptions[name]
+                        else:
+                            e.pop("description", None)
+                        return e
+
+                    data = [model, *(entry(x) for x in svc.aliases)]
                     data = data if loaded else []
                     if svc.images is not None:            # the image model: POST /v1/images/generations
                         data.append({"id": svc.images.model, "object": "model", "status": {"value": "loaded"},
@@ -8270,9 +8441,12 @@ def make_handler(svc: Service):
                 self._json(e.status, {"error": {"type": "invalid_request_error", "message": str(e)}})
 
         def _post(self):
+            path = self.path.split("?")[0].rstrip("/")   # issue #55: Claude Code posts /v1/messages?beta=true
+            if svc.accounts is not None and path.startswith("/account/"):
+                self._account_post(path)
+                return
             if not self._authorized():
                 return
-            path = self.path.split("?")[0].rstrip("/")   # issue #55: Claude Code posts /v1/messages?beta=true
             path = V1_V1_ALIASES.get(path, path)         # an Anthropic client given ".../v1" as its base posts /v1/v1/messages
             if path.startswith("/v1/") and self._foreign_page():
                 return
@@ -8747,7 +8921,8 @@ def make_handler(svc: Service):
             chunks = openai_chunks(svc, req, ids, thinking, tools, max_new, cancel, run=run, force=force)
             if validator is not None:
                 chunks = structured_chunks(chunks, validator)
-            chunks = self._capture(chunks, "openai")
+            chunks = self._meter(self._capture(chunks, "openai"), "openai",
+                                 path="/v1/chat/completions", model=req.get("model"))
             if not req.get("stream"):
                 return self._json(200, openai_collect(chunks))
             self._sse()
@@ -8832,7 +9007,8 @@ def make_handler(svc: Service):
                         done = x
                 if done is not None and done["finish"] != "cancel" and not cancel.is_set():
                     yield from asm.finish(done, check)
-            items = self._capture(events(), "responses")
+            items = self._meter(self._capture(events(), "responses"), "responses",
+                                path="/v1/responses", model=req.get("model"))
             if not req.get("stream"):
                 try:
                     result = responses_api.collect(items)
@@ -8984,7 +9160,8 @@ def make_handler(svc: Service):
             _debug_req("anthropic", req, messages, tools, max_new, thinking, len(ids))
             events = anthropic_events(svc, req, ids, thinking, callable_tools, max_new, cancel, force=force,
                                       deferred=deferred)
-            events = self._capture(events, "anthropic")
+            events = self._meter(self._capture(events, "anthropic"), "anthropic",
+                                 path="/v1/messages", model=req.get("model"))
             if not req.get("stream"):
                 return self._json(200, anthropic_collect(events))
             self._sse()
@@ -10334,6 +10511,10 @@ def _main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> i
                   sampling_defaults=sampling_defaults,
                   fit_max_tokens=a.fit_max_tokens or (not a.no_fit_max_tokens and cfg.get("fit_max_tokens") is not False))
     svc.launch_attestation = launch_attestation
+    try:
+        svc.accounts = accounts_api.Accounts.from_config(cfg.get("accounts"))
+    except accounts_api.AuthError as e:
+        ap.error(f"the config's \"accounts\": {e.message}")
     if (cfg.get("arch") or "") == "deepseek41" and vision is None and a.engine == "strata":
         # DeepSeek-V4.1 reads pictures with the engine's own tower (--vision on, the default): no separate reader process.
         # `--vision off` in the config's args, or a pack without a tower, leaves svc.vision None: pictures are refused with the 400 as before.
@@ -10395,7 +10576,21 @@ def _main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> i
         raise SystemExit(f"[strata] config {e}")
     if svc.aliases:
         print(f"[strata] model aliases: {', '.join(svc.aliases)}", flush=True)
+    try:
+        svc.set_alias_presets(cfg.get("alias_presets"))   # per-alias settings (e.g. a projection-on model name)
+    except ValueError as e:
+        raise SystemExit(f"[strata] config {e}")
+    for _name, _block in svc.alias_presets.items():
+        print(f"[strata] alias {_name}: " + ", ".join(f"{k}={v}" for k, v in _block.items()), flush=True)
+    try:
+        svc.set_model_descriptions(cfg.get("model_descriptions"))   # the sentence /v1/models shows per name
+    except ValueError as e:
+        raise SystemExit(f"[strata] config {e}")
     svc.api_key = preflight_api_key
+    if svc.accounts is not None:
+        print(f"[strata] accounts: on (the Keys tab of the web page; keys kept in {svc.accounts.path}); "
+              f"{'the shared api_key is accepted as well' if svc.api_key else 'only the keys issued there reach the model'}",
+              flush=True)
     try:
         svc.telemetry_key = api_key_of(os.environ.get("STRATA_TELEMETRY_KEY") or cfg.get("telemetry_read_key", ""))
     except ValueError as e:

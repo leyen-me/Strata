@@ -505,6 +505,7 @@ applies at the next start. Network, key, MCP and program keys are not editable t
 | `lazy_load` | off | Start without loading the model. |
 | `slot_save_path` | none | Enables session files. |
 | `host`, `api_key`, `cors_origins`, `trusted_origins`, `allowed_hosts` | local only | See [Network access](#network-access). |
+| `accounts` | off | The Keys tab of the web page: accounts, their own API keys, and a row per finished request (the Monitor shows recent requests). `true`, or a block: `db` (default `<state>/accounts.db`), `allow_register` (`true`), `admins` (emails that also see every account), `token_days` (`7`), `jwt_secret`. Changes to the block apply at the next start; accounts and keys change at once. See [Network access](#network-access). |
 | `codex_thread_titles`, `codex_compaction_cache` | off | See [Codex CLI](#the-responses-api-and-codex-cli). |
 | `mcp_servers`, `mcp` | none | See [Tools from MCP servers](#tools-from-mcp-servers). |
 
@@ -652,6 +653,16 @@ tables per token). The scaling is fixed for the whole run, because the KV cache 
   Several keys (one per client, so one can be withdrawn): `--api-key key1,key2`, `"api_key": "key1,key2"` or
   `"api_key": ["key1", "key2"]`. `STRATA_API_KEY` sets one too. Streamed answers carry `X-Accel-Buffering: no`. When you
   open the web page through a proxy or tunnel whose address differs, add it: `"trusted_origins": ["https://strata.example.com"]`.
+- **One key per person:** the config's `"accounts": true` (or a block, below) turns on the Keys tab of the web page,
+  where people make an account, sign in, and make their own API keys. Every finished request is recorded against the
+  key that made it, and the Monitor's recent requests are the running log. Signed in, a person sees their own keys and
+  can copy or use any of them again, in any browser: the file keeps the key's text for its owner beside the hash that
+  /v1 checks, so the database is private (mode 0600) and belongs to the server. Revoking one stops it at the next
+  request. There is no rate limit or per-person quota: this is who-may-call, not
+  how-much. The keys and the request rows live in one SQLite file (by default `<state>/accounts.db`), so the server
+  still needs no other service. A key from the config's `api_key` keeps working alongside them (the owner's own key,
+  an agent's). The About tab no longer offers the Model settings or the API-key field to visitors; the owner edits the
+  run config on disk.
 - **Browser pages (CORS):** off by default. `"cors_origins": ["https://chat.example.com"]` lets those origins call `/v1/*`;
   `["*"]` lets any page and is only sensible with an API key. It never opens `/settings`, `/unload` or the MCP tools. It
   belongs to the engine's own server; the desktop app answers browser pages on its own API address and already allows
